@@ -58,20 +58,34 @@ export function blockinessScore(
 }
 
 export function deblockStrength(blockiness: number): number {
-  return clamp((blockiness - 1.0) / 0.55, 0, 1)
+  return clamp((blockiness - 1.32) / 0.5, 0, 1)
 }
 
-/** 0 = nítida, 1 = mole/apagada. */
+function percentileAt(values: number[], pct: number): number {
+  if (values.length === 0) return 0
+  const sorted = values.slice().sort((a, b) => a - b)
+  const idx = clamp(Math.round((pct / 100) * (sorted.length - 1)), 0, sorted.length - 1)
+  return sorted[idx]
+}
+
+/**
+ * 0 = nítida (bordas reais fortes), 1 = mole/apagada.
+ * Fundo liso de estúdio não conta como mole: mede as bordas que existem
+ * e ignora costuras 8×8 de JPEG para não confundir bloco com detalhe.
+ */
 export function softnessScore(
   data: Uint8ClampedArray,
   width: number,
   height: number,
 ): number {
-  let acc = 0
-  let n = 0
   const step = Math.max(1, Math.floor(Math.min(width, height) / 96))
+  const skipSeams = width >= 24 && height >= 24
+  const laps: number[] = []
   for (let y = 1; y < height - 1; y += step) {
     for (let x = 1; x < width - 1; x += step) {
+      if (skipSeams && ((x & 7) === 0 || (x & 7) === 7 || (y & 7) === 0 || (y & 7) === 7)) {
+        continue
+      }
       const i = (y * width + x) * 4
       const c = lumaAt(data, i)
       const lap =
@@ -79,12 +93,30 @@ export function softnessScore(
         Math.abs(lumaAt(data, i + 4) - c) +
         Math.abs(lumaAt(data, i - width * 4) - c) +
         Math.abs(lumaAt(data, i + width * 4) - c)
-      acc += lap
-      n++
+      laps.push(lap)
     }
   }
-  const mean = acc / Math.max(1, n)
-  return 1 - clamp(mean / 28, 0, 1)
+  if (laps.length < 16) {
+    let acc = 0
+    let n = 0
+    for (let y = 1; y < height - 1; y += step) {
+      for (let x = 1; x < width - 1; x += step) {
+        const i = (y * width + x) * 4
+        const c = lumaAt(data, i)
+        acc +=
+          Math.abs(lumaAt(data, i - 4) - c) +
+          Math.abs(lumaAt(data, i + 4) - c) +
+          Math.abs(lumaAt(data, i - width * 4) - c) +
+          Math.abs(lumaAt(data, i + width * 4) - c)
+        n++
+      }
+    }
+    return 1 - clamp(acc / Math.max(1, n) / 28, 0, 1)
+  }
+  const strong = laps.filter((v) => v >= 8)
+  const edge =
+    strong.length / laps.length < 0.04 ? percentileAt(laps, 90) : percentileAt(strong, 40)
+  return 1 - clamp(edge / 32, 0, 1)
 }
 
 function blendSeam(
@@ -270,12 +302,17 @@ export function planUpscale(
 ): { width: number; height: number; scale: number } {
   const longest = Math.max(width, height)
   if (longest < 2) return { width, height, scale: 1 }
+  // Original nítido: nunca Lanczos, mesmo pequeno (retrato de estúdio 236px).
+  // Upscale só em foto mole; escala alta só se estiver bem apagada, senão granula.
+  if (softness < 0.46) return { width, height, scale: 1 }
   let scale = 1
   const pixelCap = 8_000_000 / Math.max(1, width * height)
   if (longest < 1024) {
-    scale = Math.min(2.5, pixelCap, 1600 / longest)
+    const cap = softness >= 0.62 ? 2.5 : 1.35
+    scale = Math.min(cap, pixelCap, 1600 / longest)
   } else if (longest < 1600) {
-    scale = Math.min(2, pixelCap, 1600 / longest)
+    const cap = softness >= 0.62 ? 2 : 1.25
+    scale = Math.min(cap, pixelCap, 1600 / longest)
   } else if (softness > 0.62 && longest < 2200) {
     scale = Math.min(1.5, pixelCap, UPSCALE_TARGET / longest)
   }
@@ -401,9 +438,24 @@ export function recoverRgba(
 } {
   const blockiness = blockinessScore(src, width, height)
   const softness = softnessScore(src, width, height)
+  // Foto já nítida: sem deblock agressivo e sem Lanczos.
+  if (softness < 0.42) {
+    return {
+      data: new Uint8ClampedArray(src),
+      width,
+      height,
+      blockiness,
+      softness,
+      deblocked: false,
+      scale: 1,
+    }
+  }
   const plan = planUpscale(width, height, softness)
-  const boost = plan.scale > 1.4 ? 0.16 * softness : 0
-  const strength = clamp(deblockStrength(blockiness) + boost, 0, 1)
+  let strength = deblockStrength(blockiness)
+  if (softness < 0.52) strength *= 0.35
+  if (plan.scale > 1.4 && strength > 0.12) {
+    strength = clamp(strength + 0.1 * softness, 0, 1)
+  }
   let data = strength > 0.04 ? deblockRgba(src, width, height, strength) : new Uint8ClampedArray(src)
   if (plan.scale > 1) {
     data = lanczosResize(data, width, height, plan.width, plan.height)

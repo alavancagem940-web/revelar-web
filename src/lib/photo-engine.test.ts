@@ -14,6 +14,7 @@ import {
   deblockRgba,
   lanczosResize,
   planUpscale,
+  recoverRgba,
 } from './recovery.ts'
 
 function solid(
@@ -64,6 +65,70 @@ function blocky(width: number, height: number): Uint8ClampedArray {
     }
   }
   return data
+}
+
+/** Retrato nítido: listras (cabelo/tecido) + fundo liso. */
+function sharpStudio(width: number, height: number): Uint8ClampedArray {
+  const data = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      let r = 186
+      let g = 186
+      let b = 190
+      if (x < width * 0.42) {
+        const stripe = x % 4 < 2 ? 16 : 238
+        r = stripe
+        g = stripe
+        b = stripe
+      } else if (x > width * 0.58 && x < width * 0.78 && y > height * 0.22 && y < height * 0.88) {
+        r = 196
+        g = 32
+        b = 48
+        if ((y + x) % 5 === 0) {
+          r = 160
+          g = 22
+          b = 36
+        }
+      }
+      data[i] = r
+      data[i + 1] = g
+      data[i + 2] = b
+      data[i + 3] = 255
+    }
+  }
+  return data
+}
+
+function patchStd(
+  data: Uint8ClampedArray,
+  x0: number,
+  y0: number,
+  pw: number,
+  ph: number,
+  width: number,
+): number {
+  const values: number[] = []
+  for (let y = y0; y < y0 + ph; y++) {
+    for (let x = x0; x < x0 + pw; x++) {
+      const i = (y * width + x) * 4
+      values.push(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])
+    }
+  }
+  const mean = values.reduce((a, b) => a + b, 0) / values.length
+  let acc = 0
+  for (const v of values) acc += (v - mean) * (v - mean)
+  return Math.sqrt(acc / values.length)
+}
+
+function meanAbsDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
+  let acc = 0
+  const n = a.length / 4
+  for (let i = 0; i < a.length; i += 4) {
+    acc +=
+      (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3
+  }
+  return acc / n
 }
 
 describe('photo engine', () => {
@@ -154,11 +219,43 @@ describe('recovery', () => {
     expect(planUpscale(1920, 1080, 0.1)).toEqual({ width: 1920, height: 1080, scale: 1 })
   })
 
-  it('sobe foto pequena rumo a 1920', () => {
-    const plan = planUpscale(400, 280, 0.4)
+  it('não upscala original nítido mesmo pequeno', () => {
+    expect(planUpscale(236, 354, 0.34).scale).toBe(1)
+    expect(planUpscale(400, 280, 0.2).scale).toBe(1)
+  })
+
+  it('sobe foto pequena e mole rumo a 1920', () => {
+    const plan = planUpscale(400, 280, 0.7)
     expect(plan.scale).toBeGreaterThan(1.5)
     expect(plan.width).toBeGreaterThan(400)
     expect(Math.max(plan.width, plan.height)).toBeGreaterThanOrEqual(900)
+  })
+
+  it('original nítido não sofre deblock nem Lanczos', () => {
+    const src = sharpStudio(96, 72)
+    const rec = recoverRgba(src, 96, 72)
+    expect(rec.scale).toBe(1)
+    expect(rec.deblocked).toBe(false)
+    expect(rec.width).toBe(96)
+    expect(rec.height).toBe(72)
+  })
+
+  it('retrato nítido ganha pretos sem granir o fundo', () => {
+    const width = 120
+    const height = 90
+    const src = sharpStudio(width, height)
+    const out = enhanceRgba(src, width, height, { intensity: 1 })
+    expect(out.width).toBe(width)
+    expect(out.height).toBe(height)
+    expect(out.scale).toBe(1)
+    expect(meanAbsDiff(src, out.data)).toBeGreaterThan(1.2)
+    const before = lumaRange(src, 1, 99)
+    const after = lumaRange(out.data, 1, 99)
+    expect(after.lo).toBeLessThanOrEqual(before.lo + 1)
+    const bgX = Math.floor(width * 0.84)
+    const bgBefore = patchStd(src, bgX, 2, width - bgX - 2, 16, width)
+    const bgAfter = patchStd(out.data, bgX, 2, width - bgX - 2, 16, width)
+    expect(bgAfter).toBeLessThan(bgBefore + 2.5)
   })
 
   it('Lanczos 2× preserva cor sólida', () => {

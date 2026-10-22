@@ -19,7 +19,8 @@ Outro caminho: Safari → Compartilhar → Adicionar à Tela de Início.
 
 - Abre **JPG, PNG, HEIC** (galeria ou câmera) e **MP4 / MOV**.
 - Assim que o arquivo entra, o worker aplica o look **punch**: pretos/brancos automáticos, CLAHE no L* do LAB, unsharp de alta frequência (microtextura) e um pouco de balanço de branco. Sem slider e sem “Aplicar”.
-- **Recuperação:** primeiro suaviza artefatos de compressão (deblock), depois **upscale Lanczos** em fotos pequenas ou moles (nunca reduz uma foto já boa), e só então o realce de textura. JPEG ruim vira padrão bar; foto boa não vira papa.
+- **Recuperação:** deblock e **Lanczos** só em JPEG ruim/mole. Foto já nítida (retrato de estúdio) não é desbloqueada nem upscalada — Lanczos em original pequeno e nítido granula pele e fundo.
+- **Punch seletivo:** pretos profundos e textura em cabelo/tecido. Pele e fundo lisos ficam lisos (sem CLAHE/unsharp no liso). A saída nunca deve ficar pior que o original.
 - Processa e exporta sem downscale. JPEG qualidade 0,95 ou PNG se a origem for PNG.
 - Tela: **antes/depois**, escolher arquivo, barra de progresso, **Exportar** e **Remover imagem** (em cada item da fila, para tirar foto por engano ou duplicada).
 - HEIC: o Safari do iPhone decodifica nativo.
