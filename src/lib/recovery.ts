@@ -174,8 +174,10 @@ export function deblockRgba(
   }
 
   let next: Uint8ClampedArray = out
-  if (t >= 0.18) next = mosquitoSmooth(next, width, height, 0.25 + 0.4 * t)
-  if (t >= 0.28) {
+  // mosquito/blur O(9n exp) em 12 MP trava o iPhone por minutos.
+  const small = width * height <= 500_000
+  if (small && t >= 0.18) next = mosquitoSmooth(next, width, height, 0.25 + 0.4 * t)
+  if (small && t >= 0.28) {
     const blurred = blurRgb(next, width, height, 0.85 + 0.55 * t)
     const mix = 0.22 + 0.28 * t
     for (let i = 0; i < next.length; i += 4) {

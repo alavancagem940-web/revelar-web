@@ -21,7 +21,7 @@ Outro caminho: Safari → Compartilhar → Adicionar à Tela de Início.
 - Assim que o arquivo entra, o worker aplica o look **punch**: pretos/brancos automáticos, CLAHE no L* do LAB, unsharp de alta frequência (microtextura) e um pouco de balanço de branco. Sem slider e sem “Aplicar”.
 - **Recuperação limpa:** thumbnail/chat (lado longo abaixo de 900 px) sobe com **Lanczos** rumo a 1600 px — o 236×354 do chat não é o tamanho real. Deblock só em JPEG mole. Foto já em tamanho de celular (ex. 900×1600) não é upscalada.
 - **Detalhe, não HDR:** microtextura em cabelo/tecido/borda. Pele e fundo lisos ficam lisos. Curva de contraste global não é o tratamento. A saída nunca deve ficar pior que o original (sem o look sujo 590×885).
-- **PWA:** o service worker atualiza na hora (`r3-detalhe`) para o iPhone pegar o `enhance.worker` novo.
+- **PWA:** o service worker atualiza na hora (`r3-rapido`) para o iPhone pegar o `enhance.worker` novo. Foto 12 MP usa caminho rápido (sem LAB/CLAHE/gauss no Safari); status em 1–2 s.
 - Processa e exporta sem downscale. JPEG qualidade 0,95 ou PNG se a origem for PNG.
 - Tela: **antes/depois**, escolher arquivo, barra de progresso, **Exportar** e **Remover imagem** (em cada item da fila, para tirar foto por engano ou duplicada).
 - HEIC: o Safari do iPhone decodifica nativo.

@@ -37,14 +37,13 @@ function getWorker(): Worker {
 }
 
 export function enhancePhotoInWorker(
-  imageData: ImageData,
+  source: ImageBitmap | ImageData,
   intensity: number,
   signal: AbortSignal,
   onProgress: (progress: WorkerProgress) => void,
 ): Promise<ImageData> {
   const jobId = `job-${++generation}`
   const w = getWorker()
-  const buffer = imageData.data.buffer.slice(0)
 
   return new Promise((resolve, reject) => {
     const onAbort = () => {
@@ -81,6 +80,12 @@ export function enhancePhotoInWorker(
     }
     signal.addEventListener('abort', onAbort)
     w.addEventListener('message', onMessage)
+    if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
+      w.postMessage({ type: 'enhance', jobId, intensity, bitmap: source }, [source])
+      return
+    }
+    const imageData = source as ImageData
+    const buffer = imageData.data.buffer.slice(0)
     w.postMessage(
       {
         type: 'enhance',

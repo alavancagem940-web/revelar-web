@@ -6,7 +6,7 @@ import { QueueList } from '@/components/QueueList.tsx'
 import { StatusBar } from '@/components/StatusBar.tsx'
 import { AUTO_INTENSITY } from '@/lib/auto.ts'
 import { ENGINE_BUILD } from '@/lib/build.ts'
-import { bitmapToImageData, decodeImageFile, videoFirstFrame } from '@/lib/decode.ts'
+import { decodeImageFile, videoFirstFrame } from '@/lib/decode.ts'
 import { ALL_ACCEPT, classifyFile, nextExportName, PHOTO_ACCEPT } from '@/lib/files.ts'
 import {
   describeExportMime,
@@ -115,17 +115,21 @@ export default function App() {
     setPercent(4)
     setStatus(`${item.name} · lendo`)
     patch(item.id, { status: 'lendo', error: undefined })
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
 
     try {
       if (item.kind === 'foto') {
         const bitmap = await decodeImageFile(item.file)
-        const { imageData, scaled } = bitmapToImageData(bitmap)
-        bitmap.close()
-        if (!stillKept(item.id)) return
-        if (scaled) setStatus(`${item.name} · redimensionado para caber na memória`)
+        if (!stillKept(item.id)) {
+          bitmap.close()
+          return
+        }
+        const srcW = bitmap.width
+        const srcH = bitmap.height
         patch(item.id, { status: 'processando' })
+        setStatus(`${item.name} · lendo`)
         const enhanced = await enhancePhotoInWorker(
-          imageData,
+          bitmap,
           AUTO_INTENSITY,
           controller.signal,
           ({ percent: p, status: s }) => {
@@ -141,11 +145,9 @@ export default function App() {
         if (item.previousUrl) URL.revokeObjectURL(item.previousUrl)
         const resultUrl = URL.createObjectURL(blob)
         const note =
-          enhanced.width !== imageData.width
+          enhanced.width !== srcW || enhanced.height !== srcH
             ? `recuperado ${enhanced.width}×${enhanced.height}`
-            : scaled
-              ? 'redimensionado'
-              : `${enhanced.width}×${enhanced.height}`
+            : `${enhanced.width}×${enhanced.height}`
         patch(item.id, {
           status: 'pronto',
           resultBlob: blob,

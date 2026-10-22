@@ -7,6 +7,7 @@ import {
   lumaStddev,
   labToRgba,
   rgbToLab,
+  usesLabPath,
   whiteBalanceRgba,
 } from './photo-engine.ts'
 import {
@@ -186,6 +187,24 @@ describe('photo engine', () => {
     const out = whiteBalanceRgba(src, 1)
     expect(out[0]).toBeLessThan(src[0])
     expect(out[1]).toBeGreaterThan(src[1])
+  })
+
+  it('foto de celular cheia não entra no LAB lento', () => {
+    expect(usesLabPath(900, 1600)).toBe(true)
+    expect(usesLabPath(897, 1345)).toBe(true)
+    expect(usesLabPath(4032, 3024)).toBe(false)
+    expect(usesLabPath(1920, 1080)).toBe(false)
+  })
+
+  it('foto 2 MP no caminho rápido mantém tamanho e não trava', () => {
+    const width = 1600
+    const height = 1200
+    const src = solid(width, height, 140, 132, 118)
+    const t0 = Date.now()
+    const out = enhanceRgba(src, width, height, { intensity: 1, recover: false })
+    expect(Date.now() - t0).toBeLessThan(5000)
+    expect(out.width).toBe(width)
+    expect(out.height).toBe(height)
   })
 
   it('sem recover preserva o tamanho', () => {

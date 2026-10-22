@@ -47,7 +47,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        cacheId: 'revelar-web-r3-detalhe',
+        cacheId: 'revelar-web-r3-rapido',
         skipWaiting: true,
         clientsClaim: true,
         cleanupOutdatedCaches: true,

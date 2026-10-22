@@ -488,9 +488,18 @@ export function lumaRange(
   hiPct = 99,
 ): { lo: number; hi: number } {
   const n = data.length / 4
-  const values = new Float32Array(n)
-  for (let p = 0, i = 0; p < n; p++, i += 4) values[p] = lumaAt(data, i)
+  const stride = n > 120_000 ? Math.max(1, Math.floor(n / 80_000)) : 1
+  const count = Math.ceil(n / stride)
+  const values = new Float32Array(count)
+  for (let p = 0, s = 0; p < n; p += stride, s++) values[s] = lumaAt(data, p * 4)
   return { lo: percentileOf(values, loPct, 255), hi: percentileOf(values, hiPct, 255) }
+}
+
+/** LAB+CLAHE+gauss em 12 MP trava o Safari. Acima disto: caminho inteiro rápido. */
+export const LAB_PIXEL_BUDGET = 1_800_000
+
+export function usesLabPath(width: number, height: number): boolean {
+  return width * height <= LAB_PIXEL_BUDGET
 }
 
 export function highFreqEnergy(
@@ -528,6 +537,135 @@ export function channelMeans(data: Uint8ClampedArray): {
   return { r: r / n, g: g / n, b: b / n }
 }
 
+function boxBlurU8(src: Uint8Array, width: number, height: number, radius: number): Uint8Array {
+  const r = Math.max(1, radius)
+  const span = r * 2 + 1
+  const tmp = new Uint8Array(src.length)
+  const dest = new Uint8Array(src.length)
+  for (let y = 0; y < height; y++) {
+    const row = y * width
+    let acc = 0
+    for (let k = -r; k <= r; k++) acc += src[row + clamp(k, 0, width - 1)]
+    for (let x = 0; x < width; x++) {
+      tmp[row + x] = acc / span
+      acc += src[row + clamp(x + r + 1, 0, width - 1)] - src[row + clamp(x - r, 0, width - 1)]
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    let acc = 0
+    for (let k = -r; k <= r; k++) acc += tmp[clamp(k, 0, height - 1) * width + x]
+    for (let y = 0; y < height; y++) {
+      dest[y * width + x] = acc / span
+      acc +=
+        tmp[clamp(y + r + 1, 0, height - 1) * width + x] -
+        tmp[clamp(y - r, 0, height - 1) * width + x]
+    }
+  }
+  return dest
+}
+
+function extractLuma8(src: Uint8ClampedArray, width: number, height: number): Uint8Array {
+  const luma = new Uint8Array(width * height)
+  for (let p = 0, i = 0; p < luma.length; p++, i += 4) luma[p] = lumaAt(src, i)
+  return luma
+}
+
+function previewMask(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  maxSide = 480,
+): Float32Array {
+  const longest = Math.max(width, height)
+  const scale = longest > maxSide ? maxSide / longest : 1
+  const pw = Math.max(2, Math.round(width * scale))
+  const ph = Math.max(2, Math.round(height * scale))
+  const luma = new Uint8Array(pw * ph)
+  for (let y = 0; y < ph; y++) {
+    const sy = Math.min(height - 1, Math.floor(((y + 0.5) * height) / ph))
+    for (let x = 0; x < pw; x++) {
+      const sx = Math.min(width - 1, Math.floor(((x + 0.5) * width) / pw))
+      luma[y * pw + x] = lumaAt(src, (sy * width + sx) * 4)
+    }
+  }
+  const blurred = boxBlurU8(luma, pw, ph, 1)
+  const small = new Float32Array(pw * ph)
+  for (let i = 0; i < small.length; i++) {
+    small[i] = clamp((Math.abs(luma[i] - blurred[i]) - 5) / 16, 0, 1)
+  }
+  if (pw === width && ph === height) return small
+  const mask = new Float32Array(width * height)
+  for (let y = 0; y < height; y++) {
+    const sy = Math.min(ph - 1, Math.floor((y * ph) / height))
+    for (let x = 0; x < width; x++) {
+      const sx = Math.min(pw - 1, Math.floor((x * pw) / width))
+      mask[y * width + x] = small[sy * pw + sx]
+    }
+  }
+  return mask
+}
+
+function stretchRgbLevels(src: Uint8ClampedArray, strength: number): Uint8ClampedArray {
+  if (strength <= 0.01) return copyRgba(src)
+  const { lo, hi } = lumaRange(src, 0.7, 99.3)
+  const span = hi - lo
+  if (span < 12) return copyRgba(src)
+  const gain = (245 - 8) / span
+  const out = copyRgba(src)
+  const t = clamp(strength, 0, 1)
+  for (let i = 0; i < src.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const stretched = 8 + (src[i + c] - lo) * gain
+      out[i + c] = src[i + c] + (stretched - src[i + c]) * t
+    }
+  }
+  return out
+}
+
+function fastPunchRgba(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  intensity: number,
+  options: EnhanceOptions,
+): Uint8ClampedArray {
+  const { onProgress, shouldCancel, fast } = options
+  const upscaled = options.upscaled ?? 1
+  const { lo, hi } = lumaRange(src, 1, 99)
+  const washed = clamp((125 - (hi - lo)) / 75, 0, 1)
+
+  checkCancel(shouldCancel)
+  report(onProgress, 32, 'balanço de branco')
+  let work = whiteBalanceRgba(src, (0.04 + 0.16 * washed) * intensity)
+  if (washed > 0.22) {
+    checkCancel(shouldCancel)
+    report(onProgress, 48, 'pretos e brancos')
+    work = stretchRgbLevels(work, washed * intensity)
+  }
+
+  checkCancel(shouldCancel)
+  report(onProgress, 84, 'nitidez')
+  const luma = extractLuma8(work, width, height)
+  const blurred = boxBlurU8(luma, width, height, fast ? 1 : 2)
+  const mask = previewMask(work, width, height)
+  const grow = Math.max(0, upscaled - 1)
+  const amount = ((upscaled > 1.12 ? 0.9 : washed > 0.22 ? 0.55 : 0.28) * intensity) / (1 + 0.12 * grow)
+  const thresh = 6 * (1 + 0.15 * grow)
+  const out = copyRgba(work)
+  for (let p = 0, i = 0; p < luma.length; p++, i += 4) {
+    const gate = mask[p]
+    if (gate < 0.05) continue
+    const high = luma[p] - blurred[p]
+    if (Math.abs(high) < thresh) continue
+    const add = amount * high * gate
+    out[i] = work[i] + add
+    out[i + 1] = work[i + 1] + add
+    out[i + 2] = work[i + 2] + add
+  }
+  report(onProgress, 100, 'concluído')
+  return out
+}
+
 function punchRgba(
   src: Uint8ClampedArray,
   width: number,
@@ -535,6 +673,9 @@ function punchRgba(
   intensity: number,
   options: EnhanceOptions,
 ): Uint8ClampedArray {
+  if (!usesLabPath(width, height)) {
+    return fastPunchRgba(src, width, height, intensity, options)
+  }
   const { onProgress, shouldCancel, fast } = options
   const upscaled = options.upscaled ?? 1
   const pixels = width * height
@@ -600,20 +741,20 @@ export function enhanceRgba(
   const intensity = clamp(options.intensity ?? 1, 0, 1)
   checkCancel(options.shouldCancel)
   report(options.onProgress, 6, 'lendo')
-  const original = copyRgba(src)
   if (intensity <= 0.01) {
     report(options.onProgress, 100, 'concluído')
-    return { data: original, width, height, scale: 1 }
+    return { data: copyRgba(src), width, height, scale: 1 }
   }
 
-  let work = original
+  let work = src
   let outW = width
   let outH = height
   let scale = 1
   const recover = options.recover !== false && !options.fast
   if (recover) {
     checkCancel(options.shouldCancel)
-    report(options.onProgress, 14, 'desbloqueio')
+    const small = Math.max(width, height) < 900
+    report(options.onProgress, 14, small ? 'Lanczos' : 'desbloqueio')
     const recovered = recoverRgba(work, width, height)
     work = recovered.data
     outW = recovered.width
