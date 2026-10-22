@@ -376,20 +376,45 @@ export function claheL(
 
 /**
  * 0 em pele/fundo lisos, 1 em cabelo/tecido/bordas.
- * CLAHE e unsharp só entram onde há detalhe real — o fundo cinza fica liso.
+ * Depois de Lanczos o fundo interpolado fica ainda mais liso — sobe o piso.
  */
 export function textureMask(
   L: Float32Array,
   width: number,
   height: number,
+  upscaled = 1,
 ): Float32Array {
   const blurred = blurFloat(L, width, height, 1.15)
   const mask = new Float32Array(L.length)
+  const grow = Math.max(0, upscaled - 1)
+  const floor = 0.55 + 0.4 * grow
+  const span = 2.8 + 0.5 * grow
   for (let i = 0; i < L.length; i++) {
     const high = Math.abs(L[i] - blurred[i])
-    mask[i] = clamp((high - 0.55) / 2.8, 0, 1)
+    mask[i] = clamp((high - floor) / span, 0, 1)
   }
   return mask
+}
+
+/** Microtextura tipo celular: só em borda real. Não é curva HDR. */
+export function revealDetailL(
+  L: Float32Array,
+  width: number,
+  height: number,
+  amount: number,
+  upscaled = 1,
+  mask?: Float32Array,
+  fast = false,
+): void {
+  if (amount <= 0.02) return
+  const grow = Math.max(0, upscaled - 1)
+  const fine = (0.78 * amount) / (1 + 0.16 * grow)
+  const thresh = 0.4 * (1 + 0.18 * grow)
+  applyUnsharpPass(L, width, height, 0.58, fine, thresh, mask)
+  if (!fast) {
+    const mid = (0.24 * amount) / (1 + 0.1 * grow)
+    applyUnsharpPass(L, width, height, 1.65, mid, 0.62, mask)
+  }
 }
 
 /**
@@ -515,34 +540,48 @@ function punchRgba(
   const pixels = width * height
   const { lo, hi } = lumaRange(src, 1, 99)
   const washed = clamp((125 - (hi - lo)) / 75, 0, 1)
+  const fromSmall = upscaled > 1.12
 
   checkCancel(shouldCancel)
   report(onProgress, 32, 'balanço de branco')
-  const balanced = whiteBalanceRgba(src, (0.1 + 0.18 * washed) * intensity)
-
-  checkCancel(shouldCancel)
-  report(onProgress, 48, 'pretos e brancos')
+  const balanced = whiteBalanceRgba(src, (0.05 + 0.2 * washed) * intensity)
   const lab = rgbToLab(balanced, pixels)
-  autoBlackWhiteL(lab.L, (0.62 + 0.38 * washed) * intensity)
-  sCurveL(lab.L, 0.08 + 0.18 * intensity * (0.4 + 0.6 * washed))
 
-  checkCancel(shouldCancel)
-  report(onProgress, 62, 'CLAHE')
-  const L0 = new Float32Array(lab.L)
-  const mask = textureMask(L0, width, height)
-  claheL(lab.L, width, height, intensity * (0.72 + 0.28 * washed), fast)
-  const claheMix = (fast ? 0.55 : 0.64) / (1 + 0.06 * Math.max(0, upscaled - 1))
-  for (let i = 0; i < lab.L.length; i++) {
-    const gate = washed * 0.82 + (1 - washed * 0.82) * mask[i]
-    lab.L[i] = L0[i] * (1 - claheMix * gate) + lab.L[i] * (claheMix * gate)
-    const chroma = 1 + intensity * (0.06 + 0.1 * washed + 0.1 * mask[i])
-    lab.a[i] *= chroma
-    lab.b[i] *= chroma
+  if (washed > 0.22) {
+    checkCancel(shouldCancel)
+    report(onProgress, 48, 'pretos e brancos')
+    autoBlackWhiteL(lab.L, washed * intensity)
+    sCurveL(lab.L, 0.16 * washed * intensity)
+  }
+
+  const baseL = new Float32Array(lab.L)
+  const mask = textureMask(baseL, width, height, upscaled)
+
+  if (washed > 0.22) {
+    checkCancel(shouldCancel)
+    report(onProgress, 62, 'CLAHE')
+    claheL(lab.L, width, height, washed * intensity, fast)
+    const claheMix = (fast ? 0.48 : 0.58) * washed
+    for (let i = 0; i < lab.L.length; i++) {
+      const gate = 0.18 + 0.82 * mask[i]
+      lab.L[i] = baseL[i] * (1 - claheMix * gate) + lab.L[i] * (claheMix * gate)
+      const chroma = 1 + intensity * washed * (0.08 + 0.1 * mask[i])
+      lab.a[i] *= chroma
+      lab.b[i] *= chroma
+    }
   }
 
   checkCancel(shouldCancel)
   report(onProgress, 84, 'nitidez')
-  unsharpL(lab.L, width, height, intensity * (0.7 + 0.3 * washed), fast, upscaled, mask)
+  const reveal = fromSmall
+    ? 0.95 * intensity
+    : washed > 0.22
+      ? (0.55 + 0.3 * washed) * intensity
+      : 0.26 * intensity
+  revealDetailL(lab.L, width, height, reveal, upscaled, mask, fast)
+  for (let i = 0; i < lab.L.length; i++) {
+    lab.L[i] = baseL[i] * (1 - mask[i]) + lab.L[i] * mask[i]
+  }
 
   const out = labToRgba(lab, balanced, pixels)
   report(onProgress, 100, 'concluído')

@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { ENGINE_BUILD } from '../lib/build.ts'
 import { enhanceRgba } from '../lib/photo-engine.ts'
 
 type InMessage = {
@@ -34,7 +35,14 @@ self.addEventListener('message', (event: MessageEvent<InMessage | { type: 'cance
       out.data.byteOffset + out.data.byteLength,
     )
     self.postMessage(
-      { type: 'done', jobId, width: out.width, height: out.height, buffer: outBuffer },
+      {
+        type: 'done',
+        jobId,
+        width: out.width,
+        height: out.height,
+        engine: ENGINE_BUILD,
+        buffer: outBuffer,
+      },
       [outBuffer],
     )
   } catch (err) {

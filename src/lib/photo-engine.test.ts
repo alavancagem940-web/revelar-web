@@ -219,43 +219,50 @@ describe('recovery', () => {
     expect(planUpscale(1920, 1080, 0.1)).toEqual({ width: 1920, height: 1080, scale: 1 })
   })
 
-  it('não upscala original nítido mesmo pequeno', () => {
-    expect(planUpscale(236, 354, 0.34).scale).toBe(1)
-    expect(planUpscale(400, 280, 0.2).scale).toBe(1)
+  it('fonte pequena sobe rumo ao lado longo de celular, sem o 590×885 sujo', () => {
+    const plan = planUpscale(236, 354, 0.34)
+    expect(plan.scale).toBeGreaterThan(2.8)
+    expect(plan.width).not.toBe(590)
+    expect(plan.height).not.toBe(885)
+    expect(Math.max(plan.width, plan.height)).toBeGreaterThanOrEqual(1200)
   })
 
-  it('sobe foto pequena e mole rumo a 1920', () => {
+  it('foto já em tamanho de celular não upscala', () => {
+    expect(planUpscale(900, 1600, 0.2).scale).toBe(1)
+    expect(planUpscale(1200, 1600, 0.3).scale).toBe(1)
+  })
+
+  it('sobe foto pequena e mole rumo a 1600', () => {
     const plan = planUpscale(400, 280, 0.7)
     expect(plan.scale).toBeGreaterThan(1.5)
     expect(plan.width).toBeGreaterThan(400)
     expect(Math.max(plan.width, plan.height)).toBeGreaterThanOrEqual(900)
   })
 
-  it('original nítido não sofre deblock nem Lanczos', () => {
+  it('original nítido não sofre deblock; thumbnail sobe limpa', () => {
     const src = sharpStudio(96, 72)
     const rec = recoverRgba(src, 96, 72)
-    expect(rec.scale).toBe(1)
     expect(rec.deblocked).toBe(false)
-    expect(rec.width).toBe(96)
-    expect(rec.height).toBe(72)
+    expect(rec.scale).toBeGreaterThan(1)
+    expect(rec.width).toBeGreaterThan(96)
   })
 
-  it('retrato nítido ganha pretos sem granir o fundo', () => {
+  it('retrato nítido ganha resolução sem granir o fundo', () => {
     const width = 120
     const height = 90
     const src = sharpStudio(width, height)
+    const rec = recoverRgba(src, width, height)
     const out = enhanceRgba(src, width, height, { intensity: 1 })
-    expect(out.width).toBe(width)
-    expect(out.height).toBe(height)
-    expect(out.scale).toBe(1)
-    expect(meanAbsDiff(src, out.data)).toBeGreaterThan(1.2)
-    const before = lumaRange(src, 1, 99)
-    const after = lumaRange(out.data, 1, 99)
-    expect(after.lo).toBeLessThanOrEqual(before.lo + 1)
-    const bgX = Math.floor(width * 0.84)
-    const bgBefore = patchStd(src, bgX, 2, width - bgX - 2, 16, width)
-    const bgAfter = patchStd(out.data, bgX, 2, width - bgX - 2, 16, width)
-    expect(bgAfter).toBeLessThan(bgBefore + 2.5)
+    expect(out.width).toBe(rec.width)
+    expect(out.height).toBe(rec.height)
+    expect(out.scale).toBeGreaterThan(1)
+    expect(out.width).not.toBe(590)
+    const bgX = Math.floor(rec.width * 0.84)
+    const bgH = Math.max(8, Math.floor(rec.height * 0.12))
+    const bgBefore = patchStd(rec.data, bgX, 2, rec.width - bgX - 2, bgH, rec.width)
+    const bgAfter = patchStd(out.data, bgX, 2, rec.width - bgX - 2, bgH, rec.width)
+    expect(bgAfter).toBeLessThan(bgBefore + 2.8)
+    expect(meanAbsDiff(rec.data, out.data)).toBeGreaterThan(0.15)
   })
 
   it('Lanczos 2× preserva cor sólida', () => {

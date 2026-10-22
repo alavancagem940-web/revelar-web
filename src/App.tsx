@@ -5,6 +5,7 @@ import { Preview } from '@/components/Preview.tsx'
 import { QueueList } from '@/components/QueueList.tsx'
 import { StatusBar } from '@/components/StatusBar.tsx'
 import { AUTO_INTENSITY } from '@/lib/auto.ts'
+import { ENGINE_BUILD } from '@/lib/build.ts'
 import { bitmapToImageData, decodeImageFile, videoFirstFrame } from '@/lib/decode.ts'
 import { ALL_ACCEPT, classifyFile, nextExportName, PHOTO_ACCEPT } from '@/lib/files.ts'
 import {
@@ -305,6 +306,7 @@ export default function App() {
             Escolha a foto ou o vídeo. O tratamento profissional roda sozinho, no
             aparelho.
           </p>
+          <p className="mt-1 text-[11px] text-muted/80">Motor {ENGINE_BUILD}</p>
         </div>
         {!standalone ? (
           <a

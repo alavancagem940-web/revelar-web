@@ -293,7 +293,7 @@ function mosquitoSmooth(
   return out
 }
 
-export const UPSCALE_TARGET = 1920
+export const UPSCALE_TARGET = 1600
 
 export function planUpscale(
   width: number,
@@ -302,19 +302,14 @@ export function planUpscale(
 ): { width: number; height: number; scale: number } {
   const longest = Math.max(width, height)
   if (longest < 2) return { width, height, scale: 1 }
-  // Original nítido: nunca Lanczos, mesmo pequeno (retrato de estúdio 236px).
-  // Upscale só em foto mole; escala alta só se estiver bem apagada, senão granula.
-  if (softness < 0.46) return { width, height, scale: 1 }
-  let scale = 1
   const pixelCap = 8_000_000 / Math.max(1, width * height)
-  if (longest < 1024) {
-    const cap = softness >= 0.62 ? 2.5 : 1.35
-    scale = Math.min(cap, pixelCap, 1600 / longest)
-  } else if (longest < 1600) {
-    const cap = softness >= 0.62 ? 2 : 1.25
-    scale = Math.min(cap, pixelCap, 1600 / longest)
-  } else if (softness > 0.62 && longest < 2200) {
-    scale = Math.min(1.5, pixelCap, UPSCALE_TARGET / longest)
+  let scale = 1
+  // Thumbnail/chat (ex. 236×354) não é o tamanho real: Lanczos limpo rumo ao
+  // lado longo de celular (foto 1 = 900×1600). Não usa 2,5× — esse era o 590×885 sujo.
+  if (longest < 900) {
+    scale = Math.min(pixelCap, UPSCALE_TARGET / longest, 3.8)
+  } else if (longest < 1400 && softness > 0.52) {
+    scale = Math.min(pixelCap, UPSCALE_TARGET / longest, 1.45)
   }
   if (scale < 1.08) return { width, height, scale: 1 }
   return {
@@ -438,24 +433,11 @@ export function recoverRgba(
 } {
   const blockiness = blockinessScore(src, width, height)
   const softness = softnessScore(src, width, height)
-  // Foto já nítida: sem deblock agressivo e sem Lanczos.
-  if (softness < 0.42) {
-    return {
-      data: new Uint8ClampedArray(src),
-      width,
-      height,
-      blockiness,
-      softness,
-      deblocked: false,
-      scale: 1,
-    }
-  }
   const plan = planUpscale(width, height, softness)
+  // Deblock só em JPEG mole. Retrato nítido / PNG de estúdio: zero.
   let strength = deblockStrength(blockiness)
-  if (softness < 0.52) strength *= 0.35
-  if (plan.scale > 1.4 && strength > 0.12) {
-    strength = clamp(strength + 0.1 * softness, 0, 1)
-  }
+  if (softness < 0.42) strength = 0
+  else if (softness < 0.52) strength *= 0.28
   let data = strength > 0.04 ? deblockRgba(src, width, height, strength) : new Uint8ClampedArray(src)
   if (plan.scale > 1) {
     data = lanczosResize(data, width, height, plan.width, plan.height)

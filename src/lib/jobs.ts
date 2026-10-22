@@ -1,3 +1,5 @@
+import { ENGINE_BUILD } from './build.ts'
+
 export type WorkerProgress = { percent: number; status: string }
 
 type DoneMessage = {
@@ -28,6 +30,7 @@ function getWorker(): Worker {
   if (!worker) {
     worker = new Worker(new URL('../workers/enhance.worker.ts', import.meta.url), {
       type: 'module',
+      name: `revelar-enhance-${ENGINE_BUILD}`,
     })
   }
   return worker
