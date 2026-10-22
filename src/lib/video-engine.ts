@@ -102,29 +102,31 @@ function readFrame(
   return ctx.getImageData(0, 0, width, height)
 }
 
+function ensureCanvas(canvas: HTMLCanvasElement, width: number, height: number): CanvasRenderingContext2D {
+  if (canvas.width !== width) canvas.width = width
+  if (canvas.height !== height) canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new MediaError('canvas 2D indisponível.')
+  return ctx
+}
+
 function drawProcessed(
   dest: HTMLCanvasElement,
   imageData: ImageData,
   dx: number,
   dy: number,
   crop: number,
+  frame: HTMLCanvasElement,
+  composed: HTMLCanvasElement,
 ): void {
   const ctx = dest.getContext('2d')
   if (!ctx) throw new MediaError('canvas 2D indisponível.')
   const w = dest.width
   const h = dest.height
-  const frame = document.createElement('canvas')
-  frame.width = imageData.width
-  frame.height = imageData.height
-  const frameCtx = frame.getContext('2d')
-  if (!frameCtx) throw new MediaError('canvas 2D indisponível.')
+  const frameCtx = ensureCanvas(frame, imageData.width, imageData.height)
   frameCtx.putImageData(imageData, 0, 0)
 
-  const composed = document.createElement('canvas')
-  composed.width = w
-  composed.height = h
-  const composedCtx = composed.getContext('2d')
-  if (!composedCtx) throw new MediaError('canvas 2D indisponível.')
+  const composedCtx = ensureCanvas(composed, w, h)
   composedCtx.fillStyle = '#000'
   composedCtx.fillRect(0, 0, w, h)
   composedCtx.drawImage(frame, dx, dy, w, h)
@@ -249,7 +251,9 @@ export async function enhanceAndExportVideo(options: {
   video.preload = 'auto'
   video.src = url
 
-  const scratch = document.createElement('canvas')
+    const scratch = document.createElement('canvas')
+    const frameCanvas = document.createElement('canvas')
+    const composedCanvas = document.createElement('canvas')
 
   try {
     await waitForVideo(video)
@@ -330,7 +334,15 @@ export async function enhanceAndExportVideo(options: {
       const processed = new ImageData(width, height)
       processed.data.set(enhanced)
       const shift = shifts[i] ?? { dx: 0, dy: 0 }
-      drawProcessed(canvas, processed, shift.dx, shift.dy, crop)
+      drawProcessed(
+        canvas,
+        processed,
+        shift.dx,
+        shift.dy,
+        crop,
+        frameCanvas,
+        composedCanvas,
+      )
       if (recTrack) requestFrame(recTrack)
       if (!recorder) {
         if (i % Math.max(1, Math.round(fps / 8)) === 0) {
