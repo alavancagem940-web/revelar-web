@@ -2,6 +2,8 @@
 
 Companheiro **PWA** do app de computador Revelar: aprimora fotos e vídeos **no iPhone**, pelo Safari, com ícone na Tela de Início. Interface em português, modo escuro. Sem login, sem nuvem e sem marca d’água.
 
+**100% automático:** você escolhe o arquivo e o tratamento profissional começa sozinho. Sem slider, sem exposição manual, sem toque em “Aplicar”.
+
 Este repositório é só a versão web. O desktop Python fica em [alavancagem940-web/revelar](https://github.com/alavancagem940-web/revelar) e **não** mistura com o TrilhaPy nem com o Inglês Real.
 
 ## Abrir no iPhone
@@ -16,13 +18,13 @@ Outro caminho: Safari → Compartilhar → Adicionar à Tela de Início.
 ## O que ele faz
 
 - Abre **JPG, PNG, HEIC** (galeria ou câmera) e **MP4 / MOV**.
-- Fotos: exposição automática, contraste adaptativo (CLAHE no canvas), balanço de branco, nitidez (unsharp mask) e redução de ruído. O trabalho pesado roda num **Web Worker** para a tela não congelar.
-- HEIC: o Safari do iPhone decodifica nativo. Outros navegadores de computador podem recusar HEIC — nesse caso o status avisa.
-- Vídeos: equalização de cor e estabilização leve. Clipe curto (cerca de 10 s no iPhone) para caber na memória. O Safari tenta exportar **MP4 H.264 + AAC**. Se o aparelho não encodar H.264, o app exporta uma **sequência JPEG em ZIP**, com status honesto, ainda assim salva pelo compartilhar / Arquivos.
-- Controles: **Aplicar automático**, **intensidade**, **comparar**, **desfazer**, **exportar**.
-- Nomes: `revelar-foto-001.jpg` e `revelar-video-001.mp4` (ou `revelar-video-001-quadros.zip`).
+- Assim que o arquivo entra, o worker aplica exposição, CLAHE, balanço de branco, nitidez e redução de ruído.
+- Tela: **antes/depois**, escolher arquivo, barra de progresso e **Exportar**.
+- HEIC: o Safari do iPhone decodifica nativo.
+- Vídeos: equalização de cor e estabilização leve. Clipe curto (cerca de 10 s no iPhone). O Safari tenta **MP4 H.264 + AAC**; se não encodar, sai uma **sequência JPEG em ZIP**, com status honesto.
+- Nomes: `revelar-foto-001.jpg` e `revelar-video-001.mp4`.
 
-O motor é **canvas + worker**, não OpenCV.js: o WASM do OpenCV estoura memória no Safari iOS. O resultado visual segue o mesmo pipeline do desktop (ruído → branco → exposição → CLAHE → nitidez).
+O motor é **canvas + worker**, não OpenCV.js.
 
 ## Como executar localmente
 
@@ -45,17 +47,17 @@ O GitHub Pages usa o fluxo em `.github/workflows/github-pages.yml`.
 
 ## Arquivos no iPhone
 
-Depois de **Exportar**, escolha **Salvar em Arquivos** ou **Salvar no Fotos** na folha de compartilhar. JPEG/PNG sRGB e MP4 H.264/AAC abrem no Fotos. A sequência JPEG (ZIP) abre no app Arquivos.
+Depois de **Exportar**, escolha **Salvar em Arquivos** ou **Salvar no Fotos**. JPEG sRGB e MP4 H.264/AAC abrem no Fotos.
 
 Não há IPA nem App Store. O perfil só coloca o atalho.
 
 ## Estrutura
 
-- `src/App.tsx` — fila, pré-visualização, controles
-- `src/lib/photo-engine.ts` — pipeline de foto (testável sem DOM)
+- `src/App.tsx` — fila, pré-visualização, revelação automática
+- `src/lib/photo-engine.ts` — pipeline de foto
 - `src/workers/enhance.worker.ts` — worker da revelação
 - `src/lib/video-engine.ts` — equalização, estabilização leve, MediaRecorder
-- `src/lib/export.ts` — JPEG/PNG, MP4, ZIP, compartilhar
+- `src/lib/export.ts` — JPEG, MP4, ZIP, compartilhar
 - `public/instalar.html` e `public/revelar.mobileconfig` — Web Clip
 
 ## Licença

@@ -15,8 +15,8 @@ export function QueueList({
   if (items.length === 0) {
     return (
       <p className="px-1 text-sm leading-relaxed text-muted">
-        A fila está vazia. Escolha fotos (JPG, PNG, HEIC) ou vídeos (MP4, MOV) da
-        galeria.
+        Escolha fotos (JPG, PNG, HEIC) ou vídeos (MP4, MOV). O tratamento começa
+        sozinho.
       </p>
     )
   }

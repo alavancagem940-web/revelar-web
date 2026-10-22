@@ -24,5 +24,3 @@ export type QueueItem = {
   error?: string
   exportNote?: string
 }
-
-export type PhotoFormat = 'JPEG' | 'PNG'
