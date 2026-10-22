@@ -29,10 +29,14 @@ self.addEventListener('message', (event: MessageEvent<InMessage | { type: 'cance
         self.postMessage({ type: 'progress', jobId, percent, status })
       },
     })
-    const outBuffer = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
-    self.postMessage({ type: 'done', jobId, width, height, buffer: outBuffer }, [
-      outBuffer,
-    ])
+    const outBuffer = out.data.buffer.slice(
+      out.data.byteOffset,
+      out.data.byteOffset + out.data.byteLength,
+    )
+    self.postMessage(
+      { type: 'done', jobId, width: out.width, height: out.height, buffer: outBuffer },
+      [outBuffer],
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : 'falha no aprimoramento'
     self.postMessage({

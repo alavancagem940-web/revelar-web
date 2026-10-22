@@ -19,8 +19,9 @@ Outro caminho: Safari → Compartilhar → Adicionar à Tela de Início.
 
 - Abre **JPG, PNG, HEIC** (galeria ou câmera) e **MP4 / MOV**.
 - Assim que o arquivo entra, o worker aplica o look **punch**: pretos/brancos automáticos, CLAHE no L* do LAB, unsharp de alta frequência (microtextura) e um pouco de balanço de branco. Sem slider e sem “Aplicar”.
-- Processa e exporta na **resolução nativa** (sem downscale). JPEG qualidade 0,95 ou PNG se a origem for PNG.
-- Tela: **antes/depois**, escolher arquivo, barra de progresso e **Exportar**.
+- **Recuperação:** primeiro suaviza artefatos de compressão (deblock), depois **upscale Lanczos** em fotos pequenas ou moles (nunca reduz uma foto já boa), e só então o realce de textura. JPEG ruim vira padrão bar; foto boa não vira papa.
+- Processa e exporta sem downscale. JPEG qualidade 0,95 ou PNG se a origem for PNG.
+- Tela: **antes/depois**, escolher arquivo, barra de progresso, **Exportar** e **Remover imagem** (em cada item da fila, para tirar foto por engano ou duplicada).
 - HEIC: o Safari do iPhone decodifica nativo.
 - Vídeos: equalização de cor e estabilização leve. Clipe curto (cerca de 10 s no iPhone). O Safari tenta **MP4 H.264 + AAC**; se não encodar, sai uma **sequência JPEG em ZIP**, com status honesto.
 - Nomes: `revelar-foto-001.jpg` e `revelar-video-001.mp4`.
@@ -55,7 +56,8 @@ Não há IPA nem App Store. O perfil só coloca o atalho.
 ## Estrutura
 
 - `src/App.tsx` — fila, pré-visualização, revelação automática
-- `src/lib/photo-engine.ts` — pipeline de foto
+- `src/lib/photo-engine.ts` — pipeline de foto (punch LAB)
+- `src/lib/recovery.ts` — deblock JPEG + upscale Lanczos
 - `src/workers/enhance.worker.ts` — worker da revelação
 - `src/lib/video-engine.ts` — equalização, estabilização leve, MediaRecorder
 - `src/lib/export.ts` — JPEG, MP4, ZIP, compartilhar

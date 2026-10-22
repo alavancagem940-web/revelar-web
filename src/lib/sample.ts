@@ -5,7 +5,11 @@ function hashNoise(x: number, y: number): number {
   return n - Math.floor(n)
 }
 
-export function washedBarPixels(width = 960, height = 640): Uint8ClampedArray {
+export function washedBarPixels(
+  width = 960,
+  height = 640,
+  fogAmount = 0.42,
+): Uint8ClampedArray {
   const data = new Uint8ClampedArray(width * height * 4)
   const cx = width * 0.47
   const cy = height * 0.44
@@ -84,9 +88,9 @@ export function washedBarPixels(width = 960, height = 640): Uint8ClampedArray {
       b += n * 0.88
 
       const fog = 150
-      r = fog + (r - fog) * 0.42
-      g = fog + (g - fog) * 0.4
-      b = fog + (b - fog) * 0.38
+      r = fog + (r - fog) * fogAmount
+      g = fog + (g - fog) * (fogAmount * 0.95)
+      b = fog + (b - fog) * (fogAmount * 0.9)
 
       const i = (y * width + x) * 4
       data[i] = r
@@ -98,10 +102,92 @@ export function washedBarPixels(width = 960, height = 640): Uint8ClampedArray {
   return data
 }
 
+function downsampleBox(
+  src: Uint8ClampedArray,
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number,
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(dstW * dstH * 4)
+  const sx = srcW / dstW
+  const sy = srcH / dstH
+  for (let y = 0; y < dstH; y++) {
+    const y0 = Math.floor(y * sy)
+    const y1 = Math.max(y0 + 1, Math.floor((y + 1) * sy))
+    for (let x = 0; x < dstW; x++) {
+      const x0 = Math.floor(x * sx)
+      const x1 = Math.max(x0 + 1, Math.floor((x + 1) * sx))
+      let r = 0
+      let g = 0
+      let b = 0
+      let n = 0
+      for (let yy = y0; yy < y1 && yy < srcH; yy++) {
+        for (let xx = x0; xx < x1 && xx < srcW; xx++) {
+          const i = (yy * srcW + xx) * 4
+          r += src[i]
+          g += src[i + 1]
+          b += src[i + 2]
+          n++
+        }
+      }
+      const o = (y * dstW + x) * 4
+      out[o] = r / n
+      out[o + 1] = g / n
+      out[o + 2] = b / n
+      out[o + 3] = 255
+    }
+  }
+  return out
+}
+
+/** Foto pequena, mole e “JPEG”: downscale bruto + blocos 8×8. */
+export function artifactBarPixels(width = 420, height = 280): Uint8ClampedArray {
+  const hi = washedBarPixels(width * 4, height * 4, 0.72)
+  const src = downsampleBox(hi, width * 4, height * 4, width, height)
+  const out = new Uint8ClampedArray(src.length)
+  const block = 8
+  const mix = 0.72
+  const q = 14
+  for (let by = 0; by < height; by += block) {
+    for (let bx = 0; bx < width; bx += block) {
+      const x1 = Math.min(width, bx + block)
+      const y1 = Math.min(height, by + block)
+      let r = 0
+      let g = 0
+      let b = 0
+      let n = 0
+      for (let y = by; y < y1; y++) {
+        for (let x = bx; x < x1; x++) {
+          const i = (y * width + x) * 4
+          r += src[i]
+          g += src[i + 1]
+          b += src[i + 2]
+          n++
+        }
+      }
+      r = Math.round(r / n / q) * q
+      g = Math.round(g / n / q) * q
+      b = Math.round(b / n / q) * q
+      for (let y = by; y < y1; y++) {
+        for (let x = bx; x < x1; x++) {
+          const i = (y * width + x) * 4
+          const noise = (hashNoise(x + 3, y + 11) - 0.5) * 2.2
+          out[i] = src[i] * (1 - mix) + r * mix + noise
+          out[i + 1] = src[i + 1] * (1 - mix) + g * mix + noise
+          out[i + 2] = src[i + 2] * (1 - mix) + b * mix + noise * 0.7
+          out[i + 3] = 255
+        }
+      }
+    }
+  }
+  return out
+}
+
 export function makeSamplePhoto(): File {
-  const width = 960
-  const height = 640
-  const pixels = washedBarPixels(width, height)
+  const width = 420
+  const height = 280
+  const pixels = artifactBarPixels(width, height)
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
@@ -110,9 +196,9 @@ export function makeSamplePhoto(): File {
   const image = new ImageData(width, height)
   image.data.set(pixels)
   ctx.putImageData(image, 0, 0)
-  const bytes = canvas.toDataURL('image/jpeg', 0.88)
+  const bytes = canvas.toDataURL('image/jpeg', 0.28)
   const binary = atob(bytes.split(',')[1] ?? '')
   const raw = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) raw[i] = binary.charCodeAt(i)
-  return new File([raw], 'foto-plana.jpg', { type: 'image/jpeg' })
+  return new File([raw], 'foto-comprimida.jpg', { type: 'image/jpeg' })
 }

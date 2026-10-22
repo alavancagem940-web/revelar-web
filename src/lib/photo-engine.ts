@@ -1,3 +1,4 @@
+import { recoverRgba } from './recovery.ts'
 import { clamp } from './utils.ts'
 
 export type ProgressFn = (percent: number, status: string) => void
@@ -6,8 +7,19 @@ export type EnhanceOptions = {
   intensity?: number
   /** Passe mais leve (vídeo): menos tiles, só unsharp fino. */
   fast?: boolean
+  /** Deblock + Lanczos antes do punch. Padrão: ligado (fotos). */
+  recover?: boolean
+  /** Fator de upscale já aplicado — reduz nitidez de grão. */
+  upscaled?: number
   onProgress?: ProgressFn
   shouldCancel?: () => boolean
+}
+
+export type EnhanceResult = {
+  data: Uint8ClampedArray
+  width: number
+  height: number
+  scale: number
 }
 
 export class MediaError extends Error {
@@ -232,7 +244,7 @@ export function autoBlackWhiteL(L: Float32Array, strength: number): void {
   const lo = lumaPercentile(L, 0.65)
   const hi = lumaPercentile(L, 99.35)
   const span = hi - lo
-  if (span < 3.5) return
+  if (span < 1.6) return
   const targetLo = 2.2
   const targetHi = 97.4
   const gain = (targetHi - targetLo) / span
@@ -372,12 +384,15 @@ export function unsharpL(
   height: number,
   strength: number,
   fast = false,
+  upscaled = 1,
 ): void {
   if (strength <= 0.01) return
-  const fineAmount = 0.9 + 0.55 * strength
-  applyUnsharpPass(L, width, height, 0.7, fineAmount, 0.28)
+  const grow = Math.max(0, upscaled - 1)
+  const fineAmount = (0.9 + 0.55 * strength) / (1 + 0.12 * grow)
+  const thresh = 0.28 * (1 + 0.22 * grow)
+  applyUnsharpPass(L, width, height, 0.7, fineAmount, thresh)
   if (!fast) {
-    const clarity = 0.2 + 0.28 * strength
+    const clarity = (0.2 + 0.28 * strength) / (1 + 0.08 * grow)
     applyUnsharpPass(L, width, height, 2.05, clarity, 0.5)
   }
 }
@@ -473,14 +488,15 @@ function punchRgba(
   options: EnhanceOptions,
 ): Uint8ClampedArray {
   const { onProgress, shouldCancel, fast } = options
+  const upscaled = options.upscaled ?? 1
   const pixels = width * height
 
   checkCancel(shouldCancel)
-  report(onProgress, 18, 'balanço de branco')
+  report(onProgress, 32, 'balanço de branco')
   const balanced = whiteBalanceRgba(src, 0.28 * intensity)
 
   checkCancel(shouldCancel)
-  report(onProgress, 36, 'pretos e brancos')
+  report(onProgress, 48, 'pretos e brancos')
   const lab = rgbToLab(balanced, pixels)
   autoBlackWhiteL(lab.L, intensity)
   sCurveL(lab.L, 0.14 + 0.12 * intensity)
@@ -489,7 +505,7 @@ function punchRgba(
   report(onProgress, 62, 'CLAHE')
   const L0 = new Float32Array(lab.L)
   claheL(lab.L, width, height, intensity, fast)
-  const claheMix = fast ? 0.55 : 0.68
+  const claheMix = (fast ? 0.55 : 0.68) / (1 + 0.06 * Math.max(0, upscaled - 1))
   const chroma = 1 + 0.16 * intensity
   for (let i = 0; i < lab.L.length; i++) {
     lab.L[i] = L0[i] * (1 - claheMix) + lab.L[i] * claheMix
@@ -499,7 +515,7 @@ function punchRgba(
 
   checkCancel(shouldCancel)
   report(onProgress, 84, 'nitidez')
-  unsharpL(lab.L, width, height, intensity, fast)
+  unsharpL(lab.L, width, height, intensity, fast, upscaled)
 
   const out = labToRgba(lab, balanced, pixels)
   report(onProgress, 100, 'concluído')
@@ -511,7 +527,7 @@ export function enhanceRgba(
   width: number,
   height: number,
   options: EnhanceOptions = {},
-): Uint8ClampedArray {
+): EnhanceResult {
   if (width < 2 || height < 2 || src.length < width * height * 4) {
     throw new MediaError('imagem inválida.')
   }
@@ -521,9 +537,30 @@ export function enhanceRgba(
   const original = copyRgba(src)
   if (intensity <= 0.01) {
     report(options.onProgress, 100, 'concluído')
-    return original
+    return { data: original, width, height, scale: 1 }
   }
-  return punchRgba(original, width, height, intensity, options)
+
+  let work = original
+  let outW = width
+  let outH = height
+  let scale = 1
+  const recover = options.recover !== false && !options.fast
+  if (recover) {
+    checkCancel(options.shouldCancel)
+    report(options.onProgress, 14, 'desbloqueio')
+    const recovered = recoverRgba(work, width, height)
+    work = recovered.data
+    outW = recovered.width
+    outH = recovered.height
+    scale = recovered.scale
+    if (scale > 1.01) report(options.onProgress, 22, 'Lanczos')
+  }
+
+  const punched = punchRgba(work, outW, outH, intensity, {
+    ...options,
+    upscaled: scale,
+  })
+  return { data: punched, width: outW, height: outH, scale }
 }
 
 export function enhanceFrameRgba(

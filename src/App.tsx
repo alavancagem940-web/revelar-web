@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { Aperture, Camera, FolderOpen, Share, Sparkles } from 'lucide-react'
+import { Aperture, Camera, FolderOpen, Share, Sparkles, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button.tsx'
 import { Preview } from '@/components/Preview.tsx'
 import { QueueList } from '@/components/QueueList.tsx'
@@ -46,6 +46,7 @@ export default function App() {
   const photoSerial = useRef(0)
   const videoSerial = useRef(0)
   const chain = useRef(Promise.resolve())
+  const keepRef = useRef(new Set<string>())
   const standalone = useMemo(() => isStandalone(), [])
 
   const selected = items.find((item) => item.id === selectedId) ?? null
@@ -57,13 +58,54 @@ export default function App() {
     )
   }
 
+  function stillKept(id: string): boolean {
+    return keepRef.current.has(id)
+  }
+
+  function revokeItemUrls(item: QueueItem) {
+    const urls = new Set(
+      [item.originalUrl, item.thumbUrl, item.resultUrl, item.previousUrl].filter(
+        (url): url is string => Boolean(url),
+      ),
+    )
+    for (const url of urls) {
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+    }
+  }
+
+  function removeItem(id: string) {
+    keepRef.current.delete(id)
+    if (busyId === id) abortRef.current?.abort()
+    setItems((current) => {
+      const index = current.findIndex((item) => item.id === id)
+      if (index < 0) return current
+      revokeItemUrls(current[index])
+      const next = current.filter((item) => item.id !== id)
+      const neighbor = next[Math.min(index, next.length - 1)]
+      setSelectedId((sel) => (sel === id ? neighbor?.id ?? null : sel))
+      return next
+    })
+    setStatus((text) =>
+      busyId === id || selectedId === id ? idleMessage() : text,
+    )
+    if (busyId === id) {
+      setBusyId(null)
+      setPercent(0)
+      setError(false)
+    }
+  }
+
   function enqueueEnhance(item: QueueItem) {
     chain.current = chain.current
-      .then(() => enhanceItem(item))
+      .then(() => {
+        if (!stillKept(item.id)) return
+        return enhanceItem(item)
+      })
       .catch(() => undefined)
   }
 
   async function enhanceItem(item: QueueItem) {
+    if (!stillKept(item.id)) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -78,6 +120,7 @@ export default function App() {
         const bitmap = await decodeImageFile(item.file)
         const { imageData, scaled } = bitmapToImageData(bitmap)
         bitmap.close()
+        if (!stillKept(item.id)) return
         if (scaled) setStatus(`${item.name} · redimensionado para caber na memória`)
         patch(item.id, { status: 'processando' })
         const enhanced = await enhancePhotoInWorker(
@@ -85,19 +128,28 @@ export default function App() {
           AUTO_INTENSITY,
           controller.signal,
           ({ percent: p, status: s }) => {
+            if (!stillKept(item.id)) return
             setPercent(p)
             setStatus(`${item.name} · ${s}`)
           },
         )
+        if (!stillKept(item.id)) return
         const spec = photoExportSpec(item.file)
         const blob = await imageDataToBlob(enhanced, spec.mime, spec.quality)
+        if (!stillKept(item.id)) return
         if (item.previousUrl) URL.revokeObjectURL(item.previousUrl)
         const resultUrl = URL.createObjectURL(blob)
+        const note =
+          enhanced.width !== imageData.width
+            ? `recuperado ${enhanced.width}×${enhanced.height}`
+            : scaled
+              ? 'redimensionado'
+              : `${enhanced.width}×${enhanced.height}`
         patch(item.id, {
           status: 'pronto',
           resultBlob: blob,
           resultUrl,
-          detail: scaled ? 'redimensionado' : `${enhanced.width}×${enhanced.height}`,
+          detail: note,
         })
         setPercent(100)
         setStatus(`${item.name} · concluído`)
@@ -111,10 +163,12 @@ export default function App() {
           canvas,
           signal: controller.signal,
           onProgress: (p, s) => {
+            if (!stillKept(item.id)) return
             setPercent(p)
             setStatus(`${item.name} · ${s}`)
           },
         })
+        if (!stillKept(item.id)) return
         const serial = ++videoSerial.current
         const filename = result.filename.includes('quadros')
           ? `revelar-video-${String(serial).padStart(3, '0')}-quadros.zip`
@@ -132,6 +186,7 @@ export default function App() {
         setStatus(result.note)
       }
     } catch (err) {
+      if (!stillKept(item.id)) return
       const cancelled =
         (err as Error).name === 'CancelledError' || (err as Error).message === 'cancelado'
       if (cancelled) {
@@ -145,7 +200,7 @@ export default function App() {
         setStatus(`${item.name} · ${message}`)
       }
     } finally {
-      setBusyId(null)
+      if (stillKept(item.id)) setBusyId(null)
     }
   }
 
@@ -181,8 +236,10 @@ export default function App() {
           thumbUrl = originalUrl
         }
       }
+      const id = crypto.randomUUID()
+      keepRef.current.add(id)
       next.push({
-        id: crypto.randomUUID(),
+        id,
         file,
         kind,
         name: file.name,
@@ -314,7 +371,12 @@ export default function App() {
 
         <section className="space-y-2">
           <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Fila</h2>
-          <QueueList items={items} selectedId={selectedId} onSelect={setSelectedId} />
+          <QueueList
+            items={items}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onRemove={removeItem}
+          />
         </section>
 
         <Preview
@@ -332,6 +394,15 @@ export default function App() {
           >
             <Share className="h-4 w-4" />
             Exportar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => selected && removeItem(selected.id)}
+            disabled={!selected}
+          >
+            <Trash2 className="h-4 w-4" />
+            Remover imagem
           </Button>
           {busy ? (
             <Button type="button" variant="destructive" onClick={cancel}>

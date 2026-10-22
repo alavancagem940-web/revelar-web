@@ -63,10 +63,10 @@ function encodePng(width: number, height: number, rgba: Uint8ClampedArray): Uint
 const width = 960
 const height = 640
 const before = washedBarPixels(width, height)
-const after = enhanceRgba(before, width, height, { intensity: 1 })
+const after = enhanceRgba(before, width, height, { intensity: 1, recover: false })
 
 const dest = process.argv[2] || '/cursor/stores/self/media/revelar-web'
 mkdirSync(dest, { recursive: true })
 writeFileSync(`${dest}/10-punch-before.png`, encodePng(width, height, before))
-writeFileSync(`${dest}/11-punch-after.png`, encodePng(width, height, after))
+writeFileSync(`${dest}/11-punch-after.png`, encodePng(after.width, after.height, after.data))
 console.log(`wrote ${dest}/10-punch-before.png and 11-punch-after.png`)
