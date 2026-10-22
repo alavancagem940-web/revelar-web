@@ -141,7 +141,7 @@ export function deblockRgba(
     }
   }
 
-  let next = out
+  let next: Uint8ClampedArray = out
   if (t >= 0.18) next = mosquitoSmooth(next, width, height, 0.25 + 0.4 * t)
   if (t >= 0.28) {
     const blurred = blurRgb(next, width, height, 0.85 + 0.55 * t)
@@ -174,7 +174,8 @@ function blurRgb(
   }
   for (let i = 0; i < size; i++) kernel[i] /= sum
   const tmp = new Float32Array(width * height * 3)
-  const dest = new Uint8ClampedArray(src)
+  const dest = new Uint8ClampedArray(src.length)
+  dest.set(src)
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -223,7 +224,8 @@ function mosquitoSmooth(
   height: number,
   amount: number,
 ): Uint8ClampedArray {
-  const out = new Uint8ClampedArray(src)
+  const out = new Uint8ClampedArray(src.length)
+  out.set(src)
   const sigma = 10 + 8 * amount
   const twoS2 = 2 * sigma * sigma
   for (let y = 1; y < height - 1; y++) {
