@@ -25,10 +25,13 @@ export function describeExportMime(mime: string): string {
   return mime
 }
 
+/** JPEG alta qualidade (q≈0.95). PNG ignora o fator. */
+export const PHOTO_JPEG_QUALITY = 0.95
+
 export async function blobFromCanvas(
   canvas: HTMLCanvasElement | OffscreenCanvas,
   type: 'image/jpeg' | 'image/png',
-  quality = 0.94,
+  quality = PHOTO_JPEG_QUALITY,
 ): Promise<Blob> {
   if (canvas instanceof OffscreenCanvas) {
     return canvas.convertToBlob({ type, quality })
@@ -48,7 +51,7 @@ export async function blobFromCanvas(
 export async function imageDataToBlob(
   imageData: ImageData,
   type: 'image/jpeg' | 'image/png',
-  quality = 0.94,
+  quality = PHOTO_JPEG_QUALITY,
 ): Promise<Blob> {
   const canvas = document.createElement('canvas')
   canvas.width = imageData.width
@@ -112,4 +115,22 @@ export function photoExt(format: 'JPEG' | 'PNG'): 'jpg' | 'png' {
 
 export function photoMime(format: 'JPEG' | 'PNG'): 'image/jpeg' | 'image/png' {
   return format === 'PNG' ? 'image/png' : 'image/jpeg'
+}
+
+export function photoExportSpec(file: File): {
+  format: 'JPEG' | 'PNG'
+  mime: 'image/jpeg' | 'image/png'
+  ext: 'jpg' | 'png'
+  quality: number
+} {
+  const png = file.type === 'image/png' || /\.png$/i.test(file.name)
+  if (png) {
+    return { format: 'PNG', mime: 'image/png', ext: 'png', quality: 1 }
+  }
+  return {
+    format: 'JPEG',
+    mime: 'image/jpeg',
+    ext: 'jpg',
+    quality: PHOTO_JPEG_QUALITY,
+  }
 }

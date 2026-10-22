@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyFile, nextExportName } from './files.ts'
-import { pickRecorderMime } from './export.ts'
+import { PHOTO_JPEG_QUALITY, photoExportSpec, pickRecorderMime } from './export.ts'
+import { maxPhotoSide } from './decode.ts'
 
 function file(name: string, type: string): File {
   return new File([new Uint8Array([1, 2, 3])], name, { type })
@@ -28,6 +29,24 @@ describe('export names', () => {
   it('usa o padrão revelar-foto-001', () => {
     expect(nextExportName('foto', 1, 'jpg')).toBe('revelar-foto-001.jpg')
     expect(nextExportName('video', 12, 'mp4')).toBe('revelar-video-012.mp4')
+  })
+})
+
+describe('photo export', () => {
+  it('JPEG de alta qualidade e PNG sem perda', () => {
+    expect(PHOTO_JPEG_QUALITY).toBeGreaterThanOrEqual(0.95)
+    const jpeg = photoExportSpec(file('rua.jpg', 'image/jpeg'))
+    expect(jpeg.ext).toBe('jpg')
+    expect(jpeg.quality).toBe(0.95)
+    const png = photoExportSpec(file('rua.png', 'image/png'))
+    expect(png.ext).toBe('png')
+    expect(png.mime).toBe('image/png')
+  })
+})
+
+describe('resolução nativa', () => {
+  it('não limita a foto a 1920', () => {
+    expect(maxPhotoSide()).toBeGreaterThan(8000)
   })
 })
 

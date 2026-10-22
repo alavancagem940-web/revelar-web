@@ -4,6 +4,8 @@ export type ProgressFn = (percent: number, status: string) => void
 
 export type EnhanceOptions = {
   intensity?: number
+  /** Passe mais leve (vídeo): menos tiles, só unsharp fino. */
+  fast?: boolean
   onProgress?: ProgressFn
   shouldCancel?: () => boolean
 }
@@ -13,6 +15,20 @@ export class MediaError extends Error {
     super(message)
     this.name = 'MediaError'
   }
+}
+
+const XN = 0.95047
+const YN = 1
+const ZN = 1.08883
+const DELTA = 6 / 29
+const DELTA2 = DELTA * DELTA
+const DELTA3 = DELTA2 * DELTA
+const INV_3DELTA2 = 1 / (3 * DELTA2)
+
+const SRGB_TO_LINEAR = new Float32Array(256)
+for (let i = 0; i < 256; i++) {
+  const u = i / 255
+  SRGB_TO_LINEAR[i] = u <= 0.04045 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4
 }
 
 function checkCancel(shouldCancel?: () => boolean): void {
@@ -35,8 +51,73 @@ function copyRgba(src: Uint8ClampedArray): Uint8ClampedArray {
   return new Uint8ClampedArray(src)
 }
 
+function labF(t: number): number {
+  return t > DELTA3 ? Math.cbrt(t) : t * INV_3DELTA2 + 4 / 29
+}
+
+function labFInv(t: number): number {
+  return t > DELTA ? t * t * t : 3 * DELTA2 * (t - 4 / 29)
+}
+
+function linearToSrgb8(u: number): number {
+  const c = u <= 0.0031308 ? 12.92 * u : 1.055 * u ** (1 / 2.4) - 0.055
+  return clamp(Math.round(c * 255), 0, 255)
+}
+
+export type LabImage = {
+  L: Float32Array
+  a: Float32Array
+  b: Float32Array
+}
+
+export function rgbToLab(src: Uint8ClampedArray, pixels: number): LabImage {
+  const L = new Float32Array(pixels)
+  const a = new Float32Array(pixels)
+  const b = new Float32Array(pixels)
+  for (let p = 0, i = 0; p < pixels; p++, i += 4) {
+    const r = SRGB_TO_LINEAR[src[i]]
+    const g = SRGB_TO_LINEAR[src[i + 1]]
+    const bl = SRGB_TO_LINEAR[src[i + 2]]
+    const x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * bl
+    const y = 0.2126729 * r + 0.7151522 * g + 0.072175 * bl
+    const z = 0.0193339 * r + 0.119192 * g + 0.9503041 * bl
+    const fx = labF(x / XN)
+    const fy = labF(y / YN)
+    const fz = labF(z / ZN)
+    L[p] = 116 * fy - 16
+    a[p] = 500 * (fx - fy)
+    b[p] = 200 * (fy - fz)
+  }
+  return { L, a, b }
+}
+
+export function labToRgba(
+  lab: LabImage,
+  src: Uint8ClampedArray,
+  pixels: number,
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(src.length)
+  const { L, a, b } = lab
+  for (let p = 0, i = 0; p < pixels; p++, i += 4) {
+    const fy = (L[p] + 16) / 116
+    const fx = fy + a[p] / 500
+    const fz = fy - b[p] / 200
+    const x = XN * labFInv(fx)
+    const y = YN * labFInv(fy)
+    const z = ZN * labFInv(fz)
+    const r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z
+    const g = -0.969266 * x + 1.8760108 * y + 0.041556 * z
+    const bl = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+    out[i] = linearToSrgb8(r)
+    out[i + 1] = linearToSrgb8(g)
+    out[i + 2] = linearToSrgb8(bl)
+    out[i + 3] = src[i + 3]
+  }
+  return out
+}
+
 function makeGaussianKernel(sigma: number): Float32Array {
-  const radius = Math.max(1, Math.min(6, Math.round(sigma * 2)))
+  const radius = Math.max(1, Math.min(7, Math.round(sigma * 2)))
   const size = radius * 2 + 1
   const kernel = new Float32Array(size)
   const s2 = 2 * sigma * sigma
@@ -51,25 +132,26 @@ function makeGaussianKernel(sigma: number): Float32Array {
   return kernel
 }
 
-function blurChannel(
-  src: Uint8ClampedArray,
+export function blurFloat(
+  src: Float32Array,
   width: number,
   height: number,
-  kernel: Float32Array,
-  channel: number,
-  dest: Uint8ClampedArray,
-): void {
+  sigma: number,
+): Float32Array {
+  const kernel = makeGaussianKernel(sigma)
   const radius = (kernel.length - 1) >> 1
   const tmp = new Float32Array(width * height)
+  const dest = new Float32Array(width * height)
 
   for (let y = 0; y < height; y++) {
+    const row = y * width
     for (let x = 0; x < width; x++) {
       let acc = 0
       for (let k = 0; k < kernel.length; k++) {
         const xx = clamp(x + k - radius, 0, width - 1)
-        acc += src[(y * width + xx) * 4 + channel] * kernel[k]
+        acc += src[row + xx] * kernel[k]
       }
-      tmp[y * width + x] = acc
+      tmp[row + x] = acc
     }
   }
 
@@ -80,42 +162,10 @@ function blurChannel(
         const yy = clamp(y + k - radius, 0, height - 1)
         acc += tmp[yy * width + x] * kernel[k]
       }
-      dest[(y * width + x) * 4 + channel] = acc
+      dest[y * width + x] = acc
     }
   }
-}
-
-function blurRgb(
-  src: Uint8ClampedArray,
-  width: number,
-  height: number,
-  sigma: number,
-): Uint8ClampedArray {
-  const kernel = makeGaussianKernel(sigma)
-  const dest = copyRgba(src)
-  blurChannel(src, width, height, kernel, 0, dest)
-  blurChannel(src, width, height, kernel, 1, dest)
-  blurChannel(src, width, height, kernel, 2, dest)
   return dest
-}
-
-export function denoiseRgba(
-  src: Uint8ClampedArray,
-  width: number,
-  height: number,
-  strength: number,
-): Uint8ClampedArray {
-  if (strength <= 0.05) return copyRgba(src)
-  const sigma = 0.8 + 1.1 * strength
-  const blurred = blurRgb(src, width, height, sigma)
-  const mix = 0.28 + 0.42 * strength
-  const out = copyRgba(src)
-  for (let i = 0; i < src.length; i += 4) {
-    out[i] = src[i] * (1 - mix) + blurred[i] * mix
-    out[i + 1] = src[i + 1] * (1 - mix) + blurred[i + 1] * mix
-    out[i + 2] = src[i + 2] * (1 - mix) + blurred[i + 2] * mix
-  }
-  return out
 }
 
 export function whiteBalanceRgba(
@@ -148,38 +198,58 @@ export function whiteBalanceRgba(
   return out
 }
 
-export function autoExposureRgba(
-  src: Uint8ClampedArray,
-  strength: number,
-): Uint8ClampedArray {
-  if (strength <= 0.01) return copyRgba(src)
-  let sum = 0
-  const pixels = src.length / 4
-  for (let i = 0; i < src.length; i += 4) {
-    const v = Math.max(src[i], src[i + 1], src[i + 2])
-    sum += v
+export function percentileOf(
+  values: Float32Array,
+  pct: number,
+  maxValue: number,
+): number {
+  const bins = 1024
+  const hist = new Uint32Array(bins)
+  const scale = bins / Math.max(1e-6, maxValue)
+  for (let i = 0; i < values.length; i++) {
+    const idx = clamp(Math.floor(values[i] * scale), 0, bins - 1)
+    hist[idx]++
   }
-  const mean = sum / pixels
-  if (mean < 1) return copyRgba(src)
-  const target = 118
-  let ratio = clamp(target / mean, 0.55, 2.15)
-  ratio = 1 + (ratio - 1) * strength
-  const gamma = 1 / Math.max(ratio, 0.15)
-  const lut = new Uint8Array(256)
-  for (let i = 0; i < 256; i++) {
-    lut[i] = clamp(Math.round((i / 255) ** gamma * 255), 0, 255)
+  const target = clamp(pct, 0, 100) * 0.01 * values.length
+  let acc = 0
+  for (let i = 0; i < bins; i++) {
+    acc += hist[i]
+    if (acc >= target) return (i / (bins - 1)) * maxValue
   }
-  const out = copyRgba(src)
-  for (let i = 0; i < src.length; i += 4) {
-    const v = Math.max(src[i], src[i + 1], src[i + 2])
-    const v2 = lut[v]
-    if (v <= 0) continue
-    const scale = v2 / v
-    out[i] = src[i] * scale
-    out[i + 1] = src[i + 1] * scale
-    out[i + 2] = src[i + 2] * scale
+  return maxValue
+}
+
+export function lumaPercentile(L: Float32Array, pct: number): number {
+  return percentileOf(L, pct, 100)
+}
+
+/**
+ * Pretos profundos e brancos limpos no L*, sem esmagar 0/100.
+ * Estica o intervalo útil (percentis) com ganho limitado.
+ */
+export function autoBlackWhiteL(L: Float32Array, strength: number): void {
+  if (strength <= 0.01) return
+  const lo = lumaPercentile(L, 0.65)
+  const hi = lumaPercentile(L, 99.35)
+  const span = hi - lo
+  if (span < 3.5) return
+  const targetLo = 2.2
+  const targetHi = 97.4
+  const gain = (targetHi - targetLo) / span
+  for (let i = 0; i < L.length; i++) {
+    const stretched = targetLo + (L[i] - lo) * gain
+    L[i] = clamp(L[i] + (stretched - L[i]) * strength, 0, 100)
   }
-  return out
+}
+
+/** Curva S suave no L* — corpo e profundidade, pontas protegidas. */
+export function sCurveL(L: Float32Array, amount: number): void {
+  if (amount <= 0.01) return
+  for (let i = 0; i < L.length; i++) {
+    const x = clamp(L[i] / 100, 0, 1)
+    const s = x * x * (3 - 2 * x)
+    L[i] = clamp((x + amount * (s - x)) * 100, 0, 100)
+  }
 }
 
 function buildClaheLuts(
@@ -209,7 +279,9 @@ function buildClaheLuts(
         }
       }
       if (count === 0) {
-        maps[ty][tx] = new Uint8Array(256).map((_, i) => i)
+        const identity = new Uint8Array(256)
+        for (let i = 0; i < 256; i++) identity[i] = i
+        maps[ty][tx] = identity
         continue
       }
       const clip = Math.max(1, Math.floor((clipLimit * count) / 256))
@@ -245,81 +317,88 @@ function buildClaheLuts(
   return maps
 }
 
-export function claheRgba(
-  src: Uint8ClampedArray,
+/** CLAHE no canal L* (0–100), interpolado entre tiles. */
+export function claheL(
+  L: Float32Array,
   width: number,
   height: number,
   strength: number,
-): Uint8ClampedArray {
-  const clipLimit = 1.0 + 3.2 * Math.max(0, strength)
-  const tiles = Math.min(width, height) >= 64 ? 8 : 2
+  fast = false,
+): void {
+  const clipLimit = 1.55 + 0.7 * Math.max(0, strength)
+  const minSide = Math.min(width, height)
+  const tiles = fast
+    ? minSide >= 64
+      ? 6
+      : 2
+    : minSide >= 720
+      ? 12
+      : minSide >= 64
+        ? 8
+        : 2
   const luma = new Uint8Array(width * height)
-  for (let p = 0, i = 0; p < luma.length; p++, i += 4) {
-    luma[p] = clamp(Math.round(lumaAt(src, i)), 0, 255)
+  for (let p = 0; p < L.length; p++) {
+    luma[p] = clamp(Math.round(L[p] * 2.55), 0, 255)
   }
   const maps = buildClaheLuts(luma, width, height, tiles, clipLimit)
   const tileW = Math.max(1, Math.ceil(width / tiles))
   const tileH = Math.max(1, Math.ceil(height / tiles))
-  const out = copyRgba(src)
 
   for (let y = 0; y < height; y++) {
     const ty = clamp(Math.floor(y / tileH), 0, tiles - 1)
     const ty1 = Math.min(tiles - 1, ty + 1)
     const fy = tileH <= 1 ? 0 : (y - ty * tileH + 0.5) / tileH
+    const row = y * width
     for (let x = 0; x < width; x++) {
       const tx = clamp(Math.floor(x / tileW), 0, tiles - 1)
       const tx1 = Math.min(tiles - 1, tx + 1)
       const fx = tileW <= 1 ? 0 : (x - tx * tileW + 0.5) / tileW
-      const i = (y * width + x) * 4
-      const v = luma[y * width + x]
-      const a = maps[ty][tx][v]
-      const b = maps[ty][tx1][v]
-      const c = maps[ty1][tx][v]
-      const d = maps[ty1][tx1][v]
-      const top = a * (1 - fx) + b * fx
-      const bot = c * (1 - fx) + d * fx
+      const v = luma[row + x]
+      const top = maps[ty][tx][v] * (1 - fx) + maps[ty][tx1][v] * fx
+      const bot = maps[ty1][tx][v] * (1 - fx) + maps[ty1][tx1][v] * fx
       const mapped = top * (1 - fy) + bot * fy
-      const scale = v > 1 ? mapped / v : 1
-      out[i] = src[i] * scale
-      out[i + 1] = src[i + 1] * scale
-      out[i + 2] = src[i + 2] * scale
+      L[row + x] = mapped / 2.55
     }
   }
-  return out
 }
 
-export function unsharpRgba(
-  src: Uint8ClampedArray,
+/**
+ * Unsharp de alta frequência no L* (fios, dobras, contornos).
+ * Opcional: clareza de médio alcance (contraste local).
+ */
+export function unsharpL(
+  L: Float32Array,
   width: number,
   height: number,
   strength: number,
-): Uint8ClampedArray {
-  if (strength <= 0.01) return copyRgba(src)
-  const amount = 0.35 + 0.85 * strength
-  const radius = 1.2 + 0.6 * strength
-  const blurred = blurRgb(src, width, height, radius)
-  const out = copyRgba(src)
-  for (let i = 0; i < src.length; i += 4) {
-    out[i] = src[i] + amount * (src[i] - blurred[i])
-    out[i + 1] = src[i + 1] + amount * (src[i + 1] - blurred[i + 1])
-    out[i + 2] = src[i + 2] + amount * (src[i + 2] - blurred[i + 2])
+  fast = false,
+): void {
+  if (strength <= 0.01) return
+  const fineAmount = 0.9 + 0.55 * strength
+  applyUnsharpPass(L, width, height, 0.7, fineAmount, 0.28)
+  if (!fast) {
+    const clarity = 0.2 + 0.28 * strength
+    applyUnsharpPass(L, width, height, 2.05, clarity, 0.5)
   }
-  return out
 }
 
-export function blendRgba(
-  original: Uint8ClampedArray,
-  processed: Uint8ClampedArray,
-  alpha: number,
-): Uint8ClampedArray {
-  const t = clamp(alpha, 0, 1)
-  if (t >= 0.999) return copyRgba(processed)
-  if (t <= 0.001) return copyRgba(original)
-  const out = new Uint8ClampedArray(original.length)
-  for (let i = 0; i < original.length; i++) {
-    out[i] = original[i] * (1 - t) + processed[i] * t
+function applyUnsharpPass(
+  L: Float32Array,
+  width: number,
+  height: number,
+  sigma: number,
+  amount: number,
+  threshold: number,
+): void {
+  const blurred = blurFloat(L, width, height, sigma)
+  for (let i = 0; i < L.length; i++) {
+    const high = L[i] - blurred[i]
+    if (Math.abs(high) < threshold) continue
+    const t = L[i] / 100
+    const protect = clamp(t * 6, 0, 1) * clamp((1 - t) * 8, 0, 1)
+    const mix = 0.4 + 0.6 * protect
+    L[i] = clamp(L[i] + amount * high * mix, 0, 100)
   }
-  return out
 }
 
 export function meanLuma(data: Uint8ClampedArray): number {
@@ -340,6 +419,35 @@ export function lumaStddev(data: Uint8ClampedArray): number {
   return Math.sqrt(acc / n)
 }
 
+export function lumaRange(
+  data: Uint8ClampedArray,
+  loPct = 1,
+  hiPct = 99,
+): { lo: number; hi: number } {
+  const n = data.length / 4
+  const values = new Float32Array(n)
+  for (let p = 0, i = 0; p < n; p++, i += 4) values[p] = lumaAt(data, i)
+  return { lo: percentileOf(values, loPct, 255), hi: percentileOf(values, hiPct, 255) }
+}
+
+export function highFreqEnergy(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): number {
+  let acc = 0
+  let count = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width - 1; x++) {
+      const i = (y * width + x) * 4
+      const j = i + 4
+      acc += Math.abs(lumaAt(data, i) - lumaAt(data, j))
+      count++
+    }
+  }
+  return acc / Math.max(1, count)
+}
+
 export function channelMeans(data: Uint8ClampedArray): {
   r: number
   g: number
@@ -357,6 +465,47 @@ export function channelMeans(data: Uint8ClampedArray): {
   return { r: r / n, g: g / n, b: b / n }
 }
 
+function punchRgba(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  intensity: number,
+  options: EnhanceOptions,
+): Uint8ClampedArray {
+  const { onProgress, shouldCancel, fast } = options
+  const pixels = width * height
+
+  checkCancel(shouldCancel)
+  report(onProgress, 18, 'balanço de branco')
+  const balanced = whiteBalanceRgba(src, 0.28 * intensity)
+
+  checkCancel(shouldCancel)
+  report(onProgress, 36, 'pretos e brancos')
+  const lab = rgbToLab(balanced, pixels)
+  autoBlackWhiteL(lab.L, intensity)
+  sCurveL(lab.L, 0.14 + 0.12 * intensity)
+
+  checkCancel(shouldCancel)
+  report(onProgress, 62, 'CLAHE')
+  const L0 = new Float32Array(lab.L)
+  claheL(lab.L, width, height, intensity, fast)
+  const claheMix = fast ? 0.55 : 0.68
+  const chroma = 1 + 0.16 * intensity
+  for (let i = 0; i < lab.L.length; i++) {
+    lab.L[i] = L0[i] * (1 - claheMix) + lab.L[i] * claheMix
+    lab.a[i] *= chroma
+    lab.b[i] *= chroma
+  }
+
+  checkCancel(shouldCancel)
+  report(onProgress, 84, 'nitidez')
+  unsharpL(lab.L, width, height, intensity, fast)
+
+  const out = labToRgba(lab, balanced, pixels)
+  report(onProgress, 100, 'concluído')
+  return out
+}
+
 export function enhanceRgba(
   src: Uint8ClampedArray,
   width: number,
@@ -366,39 +515,15 @@ export function enhanceRgba(
   if (width < 2 || height < 2 || src.length < width * height * 4) {
     throw new MediaError('imagem inválida.')
   }
-  const intensity = clamp(options.intensity ?? 0.65, 0, 1)
-  const { onProgress, shouldCancel } = options
-  checkCancel(shouldCancel)
-  report(onProgress, 8, 'lendo')
+  const intensity = clamp(options.intensity ?? 1, 0, 1)
+  checkCancel(options.shouldCancel)
+  report(options.onProgress, 6, 'lendo')
   const original = copyRgba(src)
   if (intensity <= 0.01) {
-    report(onProgress, 100, 'concluído')
+    report(options.onProgress, 100, 'concluído')
     return original
   }
-
-  checkCancel(shouldCancel)
-  report(onProgress, 22, 'redução de ruído')
-  let work = denoiseRgba(original, width, height, intensity)
-
-  checkCancel(shouldCancel)
-  report(onProgress, 40, 'balanço de branco')
-  work = whiteBalanceRgba(work, intensity)
-
-  checkCancel(shouldCancel)
-  report(onProgress, 58, 'exposição')
-  work = autoExposureRgba(work, intensity)
-
-  checkCancel(shouldCancel)
-  report(onProgress, 74, 'CLAHE')
-  work = claheRgba(work, width, height, intensity)
-
-  checkCancel(shouldCancel)
-  report(onProgress, 88, 'nitidez')
-  work = unsharpRgba(work, width, height, intensity)
-
-  const processed = blendRgba(original, work, intensity)
-  report(onProgress, 100, 'concluído')
-  return processed
+  return punchRgba(original, width, height, intensity, options)
 }
 
 export function enhanceFrameRgba(
@@ -414,18 +539,14 @@ export function enhanceFrameRgba(
   let work = original
   if (gains) {
     work = copyRgba(original)
-    const sr = 1 + (gains.r - 1) * t
-    const sg = 1 + (gains.g - 1) * t
-    const sb = 1 + (gains.b - 1) * t
+    const sr = 1 + (gains.r - 1) * t * 0.55
+    const sg = 1 + (gains.g - 1) * t * 0.55
+    const sb = 1 + (gains.b - 1) * t * 0.55
     for (let i = 0; i < work.length; i += 4) {
       work[i] = original[i] * sr
       work[i + 1] = original[i + 1] * sg
       work[i + 2] = original[i + 2] * sb
     }
   }
-  work = whiteBalanceRgba(work, t)
-  work = autoExposureRgba(work, t * 0.85)
-  work = claheRgba(work, width, height, t * 0.75)
-  work = unsharpRgba(work, width, height, t * 0.55)
-  return blendRgba(original, work, t)
+  return punchRgba(work, width, height, t, { fast: true })
 }

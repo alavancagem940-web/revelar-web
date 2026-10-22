@@ -2,8 +2,9 @@ import { MediaError } from './photo-engine.ts'
 import { isHeic } from './files.ts'
 import { clamp, isIosDevice } from './utils.ts'
 
+/** Fotos na resolução nativa — sem downscale. */
 export function maxPhotoSide(): number {
-  return isIosDevice() ? 1920 : 2560
+  return Number.POSITIVE_INFINITY
 }
 
 export function maxVideoSide(): number {
@@ -65,11 +66,13 @@ export function bitmapToImageData(
   maxSide = maxPhotoSide(),
 ): { imageData: ImageData; scaled: boolean } {
   const longest = Math.max(bitmap.width, bitmap.height)
-  const scale = longest > maxSide ? maxSide / longest : 1
+  const scale =
+    Number.isFinite(maxSide) && longest > maxSide ? maxSide / longest : 1
   const width = Math.max(2, Math.round(bitmap.width * scale))
   const height = Math.max(2, Math.round(bitmap.height * scale))
   const { ctx } = make2dCanvas(width, height)
-  ctx.drawImage(bitmap, 0, 0, width, height)
+  if (scale === 1) ctx.drawImage(bitmap, 0, 0)
+  else ctx.drawImage(bitmap, 0, 0, width, height)
   return {
     imageData: ctx.getImageData(0, 0, width, height),
     scaled: scale < 0.999,

@@ -7,7 +7,13 @@ import { StatusBar } from '@/components/StatusBar.tsx'
 import { AUTO_INTENSITY } from '@/lib/auto.ts'
 import { bitmapToImageData, decodeImageFile, videoFirstFrame } from '@/lib/decode.ts'
 import { ALL_ACCEPT, classifyFile, nextExportName, PHOTO_ACCEPT } from '@/lib/files.ts'
-import { describeExportMime, imageDataToBlob, pickRecorderMime, saveOrShare } from '@/lib/export.ts'
+import {
+  describeExportMime,
+  imageDataToBlob,
+  photoExportSpec,
+  pickRecorderMime,
+  saveOrShare,
+} from '@/lib/export.ts'
 import { enhancePhotoInWorker } from '@/lib/jobs.ts'
 import { makeSamplePhoto } from '@/lib/sample.ts'
 import type { QueueItem } from '@/lib/types.ts'
@@ -83,14 +89,15 @@ export default function App() {
             setStatus(`${item.name} · ${s}`)
           },
         )
-        const blob = await imageDataToBlob(enhanced, 'image/jpeg', 0.94)
+        const spec = photoExportSpec(item.file)
+        const blob = await imageDataToBlob(enhanced, spec.mime, spec.quality)
         if (item.previousUrl) URL.revokeObjectURL(item.previousUrl)
         const resultUrl = URL.createObjectURL(blob)
         patch(item.id, {
           status: 'pronto',
           resultBlob: blob,
           resultUrl,
-          detail: scaled ? 'redimensionado' : '',
+          detail: scaled ? 'redimensionado' : `${enhanced.width}×${enhanced.height}`,
         })
         setPercent(100)
         setStatus(`${item.name} · concluído`)
@@ -204,8 +211,9 @@ export default function App() {
       let filename = blob instanceof File ? blob.name : selected.name
       if (selected.kind === 'foto') {
         const serial = ++photoSerial.current
-        filename = nextExportName('foto', serial, 'jpg')
-        blob = new File([blob], filename, { type: 'image/jpeg' })
+        const spec = photoExportSpec(selected.file)
+        filename = nextExportName('foto', serial, spec.ext)
+        blob = new File([blob], filename, { type: spec.mime })
       }
       const mode = await saveOrShare(blob, filename)
       patch(selected.id, {

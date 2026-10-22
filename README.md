@@ -18,7 +18,8 @@ Outro caminho: Safari → Compartilhar → Adicionar à Tela de Início.
 ## O que ele faz
 
 - Abre **JPG, PNG, HEIC** (galeria ou câmera) e **MP4 / MOV**.
-- Assim que o arquivo entra, o worker aplica exposição, CLAHE, balanço de branco, nitidez e redução de ruído.
+- Assim que o arquivo entra, o worker aplica o look **punch**: pretos/brancos automáticos, CLAHE no L* do LAB, unsharp de alta frequência (microtextura) e um pouco de balanço de branco. Sem slider e sem “Aplicar”.
+- Processa e exporta na **resolução nativa** (sem downscale). JPEG qualidade 0,95 ou PNG se a origem for PNG.
 - Tela: **antes/depois**, escolher arquivo, barra de progresso e **Exportar**.
 - HEIC: o Safari do iPhone decodifica nativo.
 - Vídeos: equalização de cor e estabilização leve. Clipe curto (cerca de 10 s no iPhone). O Safari tenta **MP4 H.264 + AAC**; se não encodar, sai uma **sequência JPEG em ZIP**, com status honesto.
